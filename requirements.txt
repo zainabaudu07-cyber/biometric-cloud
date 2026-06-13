@@ -1,5 +1,6 @@
 flask
+gunicorn
 opencv-python-headless
 insightface
 onnxruntime
-gunicorn
+numpy<2.0.0
