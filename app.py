@@ -1,13 +1,18 @@
 from flask import Flask, render_template_string, request, jsonify
 import cv2
-import face_recognition
-import os
-import sys
 import numpy as np
 import base64
+import os
+import sys
 import time
+from insightface.app import FaceAnalysis
 
 app = Flask(__name__)
+
+# Initialize InsightFace (using the lightweight 'buffalo_l' default face analysis group)
+# 'ctx_id=-1' forces it to use the CPU, preventing crashes on free cloud servers without GPUs
+face_app = FaceAnalysis(name='buffalo_l', providers=['CPUExecutionProvider'])
+face_app.prepare(ctx_id=-1, det_size=(640, 640))
 
 def get_base_path():
     if hasattr(sys, '_MEIPASS'):
@@ -21,7 +26,8 @@ LOG_FILE_PATH = os.path.join(BASE_DIR, "security_log.txt")
 if not os.path.exists(DATABASE_DIR):
     os.makedirs(DATABASE_DIR)
 
-known_face_encodings = []
+# In-memory caches for the extracted embedding vectors
+known_face_embeddings = []
 known_face_names = []
 
 def log_security_event(name_status):
@@ -29,18 +35,14 @@ def log_security_event(name_status):
     try:
         with open(LOG_FILE_PATH, "a") as log_file:
             log_file.write(f"[{timestamp}] CLOUD_AUTH: {name_status}\n")
-        print(f"[AUDIT LOGGED] Secure track written for: {name_status}")
     except Exception as e:
         print(f"[LOG ERROR] File-system write failure: {e}")
 
 def load_database():
-    global known_face_encodings, known_face_names
-    known_face_encodings = []
+    """Scans the database folder and extracts embedding maps using InsightFace."""
+    global known_face_embeddings, known_face_names
+    known_face_embeddings = []
     known_face_names = []
-    
-    print("\n==================================================")
-    print("[SYSTEM] INITIALIZING BIOMETRIC ACCESS CONTROL...")
-    print("==================================================")
 
     if not os.path.exists(DATABASE_DIR):
         return
@@ -51,98 +53,23 @@ def load_database():
             photo_path = os.path.join(DATABASE_DIR, file_name)
             
             try:
-                rgb_img = face_recognition.load_image_file(photo_path)
-                user_encodings = face_recognition.face_encodings(rgb_img)
+                img = cv2.imread(photo_path)
+                if img is None:
+                    continue
                 
-                if len(user_encodings) > 0:
-                    known_face_encodings.append(user_encodings[0])
+                # Extract face features
+                faces = face_app.get(img)
+                if len(faces) > 0:
+                    # Save the 512-dimension floating-point vector mapping the face
+                    known_face_embeddings.append(faces[0].normed_embedding)
                     known_face_names.append(name_key)
-                    print(f"[ACTIVE DATABASE] Armed structural signature for: {name_key}")
+                    print(f"[SYSTEM] Armed signature for: {name_key}")
             except Exception as e:
-                print(f"[ERR LOG] Failure processing {file_name}: {e}")
+                print(f"[ERR] Failed processing {file_name}: {e}")
 
 load_database()
 
-HTML_PAGE = """
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Biometric Cloud Dashboard</title>
-    <style>
-        body { background-color: #121212; color: white; font-family: 'Segoe UI', sans-serif; text-align: center; padding-top: 30px; }
-        .container { display: inline-block; background: #1e1e1e; padding: 25px; border-radius: 12px; box-shadow: 0px 6px 15px rgba(0,0,0,0.6); border: 1px solid #333; }
-        video, canvas { border: 3px solid #00ff00; border-radius: 6px; width: 640px; height: 480px; background-color: #000; transform: scaleX(-1); }
-        h1 { color: #00ff00; margin-bottom: 5px; font-weight: 600; letter-spacing: 1px; }
-        p { color: #aaaaaa; font-size: 14px; margin-top: 0; }
-        .btn { background-color: #00ff00; color: black; font-weight: bold; border: none; padding: 14px 28px; font-size: 15px; border-radius: 6px; cursor: pointer; margin-top: 15px; margin-right: 10px; transition: 0.2s; }
-        .btn:hover { background-color: #00cc00; transform: scale(1.02); }
-        .btn-reg { background-color: #ffffff; color: black; }
-        .btn-reg:hover { background-color: #dddddd; }
-        #statusLog { margin-top: 20px; font-size: 20px; color: #00ff00; font-weight: bold; min-height: 30px; }
-        .footer-note { margin-top: 25px; font-size: 11px; color: #666; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>=== BIOMETRIC CLOUD INTERFACE ===</h1>
-        <p>Browser-to-Server Realtime Verification Hub</p>
-        
-        <video id="webcam" autoplay playsinline></video>
-        <canvas id="photoCanvas" style="display:none;"></canvas>
-        
-        <div id="statusLog">System Status: Armed & Ready</div>
-        
-        <button class="btn" onclick="processBiometrics('verify')">📸 Verify My Face Identity</button>
-        <button class="btn btn-reg" onclick="processBiometrics('register')">👤 Register Fresh Profile</button>
-        
-        <p class="footer-note">Cybersecurity Lab Practical Environment.</p>
-    </div>
-
-    <script>
-        const video = document.getElementById('webcam');
-        const canvas = document.getElementById('photoCanvas');
-        const context = canvas.getContext('2d');
-        const statusLog = document.getElementById('statusLog');
-
-        navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } })
-            .then(stream => { video.srcObject = stream; })
-            .catch(err => { 
-                statusLog.style.color = "#ff0000";
-                statusLog.innerText = "Camera Error: SSL Certificate (HTTPS://) encryption required."; 
-            });
-
-        function processBiometrics(actionType) {
-            statusLog.style.color = "#00ff00";
-            statusLog.innerText = actionType === 'register' ? "Syncing data matrix to cloud registry..." : "Analyzing vectors...";
-            
-            canvas.width = 640;
-            canvas.height = 480;
-            context.drawImage(video, 0, 0, 640, 480);
-            const dataUrl = canvas.toDataURL('image/jpeg');
-
-            fetch('/process_image', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ image: dataUrl, action: actionType })
-            })
-            .then(res => res.json())
-            .then(data => {
-                if (data.status === 'granted' || data.status === 'success') {
-                    statusLog.style.color = "#00ff00";
-                } else {
-                    statusLog.style.color = "#ff0000";
-                }
-                statusLog.innerText = data.message;
-            })
-            .catch(() => {
-                statusLog.style.color = "#ff0000";
-                statusLog.innerText = "Server communication failure.";
-            });
-        }
-    </script>
-</body>
-</html>
-"""
+# (Keep your HTML_PAGE string definition exactly here as it was)
 
 @app.route('/')
 def index():
@@ -157,7 +84,6 @@ def process_image():
     img_bytes = base64.b64decode(image_data)
     np_array = np.frombuffer(img_bytes, dtype=np.uint8)
     frame = cv2.imdecode(np_array, cv2.IMREAD_COLOR)
-    rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     
     if action == 'register':
         try:
@@ -172,29 +98,34 @@ def process_image():
         load_database()
         
         log_security_event("NEW_USER_REGISTRATION_SUCCESS")
-        return jsonify({"status": "success", "message": "Biometric registration locked into cloud registry!"})
+        return jsonify({"status": "success", "message": "Biometric registration successfully locked into cloud registry!"})
         
     elif action == 'verify':
-        if not known_face_encodings:
+        if not known_face_embeddings:
             log_security_event("ACCESS_REJECTED_EMPTY_DATABASE")
             return jsonify({"status": "denied", "message": "ACCESS DENIED: Database empty. Register profile first."})
             
-        face_locations = face_recognition.face_locations(rgb_frame)
-        face_encodings = face_recognition.face_encodings(rgb_frame, face_locations)
+        # Detect faces in the current webcam frame
+        faces = face_app.get(frame)
         
-        if not face_encodings:
-            return jsonify({"status": "denied", "message": "VERIFICATION FAILED: Face obscured."})
+        if not faces:
+            return jsonify({"status": "denied", "message": "VERIFICATION FAILED: Frame layout blank or face obscured."})
             
-        for face_encoding in face_encodings:
-            matches = face_recognition.compare_faces(known_face_encodings, face_encoding, tolerance=0.55)
-            if True in matches:
-                first_match_index = matches.index(True)
-                name = known_face_names[first_match_index]
+        # Extract vector from the first detected face
+        current_embedding = faces[0].normed_embedding
+        
+        # Calculate the mathematical match using dot product cosine similarity
+        for index, target_embedding in enumerate(known_face_embeddings):
+            similarity = np.dot(current_embedding, target_embedding)
+            
+            # InsightFace similarity threshold usually sits safely around 0.40 - 0.50 for verification
+            if similarity > 0.45:
+                name = known_face_names[index]
                 log_security_event(f"ACCESS_GRANTED_USER_{name.upper()}")
                 return jsonify({"status": "granted", "message": f"ACCESS GRANTED: Welcome {name}!"})
                 
         log_security_event("ACCESS_REJECTED_UNKNOWN_THREAT")
-        return jsonify({"status": "denied", "message": "ACCESS DENIED: Facial verification failed."})
+        return jsonify({"status": "denied", "message": "ACCESS DENIED: Facial signature verification failed."})
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=False)
