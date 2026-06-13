@@ -1,5 +1,5 @@
 flask
 opencv-python-headless
-face-recognition
-numpy
+insightface
+onnxruntime
 gunicorn
