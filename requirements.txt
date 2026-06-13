@@ -1,6 +1,6 @@
 flask
 gunicorn
 opencv-python-headless
-insightface
-onnxruntime
+deepface
+tf-keras
 numpy<2.0.0
