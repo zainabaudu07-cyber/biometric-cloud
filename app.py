@@ -5,14 +5,9 @@ import base64
 import os
 import sys
 import time
-from insightface.app import FaceAnalysis
+from deepface import DeepFace
 
 app = Flask(__name__)
-
-# Initialize InsightFace (using the lightweight 'buffalo_l' default face analysis group)
-# 'ctx_id=-1' forces it to use the CPU, preventing crashes on free cloud servers without GPUs
-face_app = FaceAnalysis(name='buffalo_l', providers=['CPUExecutionProvider'])
-face_app.prepare(ctx_id=-1, det_size=(640, 640))
 
 def get_base_path():
     if hasattr(sys, '_MEIPASS'):
@@ -26,10 +21,6 @@ LOG_FILE_PATH = os.path.join(BASE_DIR, "security_log.txt")
 if not os.path.exists(DATABASE_DIR):
     os.makedirs(DATABASE_DIR)
 
-# In-memory caches for the extracted embedding vectors
-known_face_embeddings = []
-known_face_names = []
-
 def log_security_event(name_status):
     timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
     try:
@@ -37,37 +28,6 @@ def log_security_event(name_status):
             log_file.write(f"[{timestamp}] CLOUD_AUTH: {name_status}\n")
     except Exception as e:
         print(f"[LOG ERROR] File-system write failure: {e}")
-
-def load_database():
-    """Scans the database folder and extracts embedding maps using InsightFace."""
-    global known_face_embeddings, known_face_names
-    known_face_embeddings = []
-    known_face_names = []
-
-    if not os.path.exists(DATABASE_DIR):
-        return
-
-    for file_name in os.listdir(DATABASE_DIR):
-        if file_name.lower().endswith(('.jpg', '.jpeg', '.png')):
-            name_key = os.path.splitext(file_name)[0].split('_')[0].capitalize()
-            photo_path = os.path.join(DATABASE_DIR, file_name)
-            
-            try:
-                img = cv2.imread(photo_path)
-                if img is None:
-                    continue
-                
-                # Extract face features
-                faces = face_app.get(img)
-                if len(faces) > 0:
-                    # Save the 512-dimension floating-point vector mapping the face
-                    known_face_embeddings.append(faces[0].normed_embedding)
-                    known_face_names.append(name_key)
-                    print(f"[SYSTEM] Armed signature for: {name_key}")
-            except Exception as e:
-                print(f"[ERR] Failed processing {file_name}: {e}")
-
-load_database()
 
 # (Keep your HTML_PAGE string definition exactly here as it was)
 
@@ -85,6 +45,10 @@ def process_image():
     np_array = np.frombuffer(img_bytes, dtype=np.uint8)
     frame = cv2.imdecode(np_array, cv2.IMREAD_COLOR)
     
+    # Save current frame to a temp file for DeepFace to read
+    temp_frame_path = os.path.join(BASE_DIR, "temp_current_frame.jpg")
+    cv2.imwrite(temp_frame_path, frame)
+    
     if action == 'register':
         try:
             for f in os.listdir(DATABASE_DIR):
@@ -95,37 +59,37 @@ def process_image():
             
         img_path = os.path.join(DATABASE_DIR, "User_Registered.jpg")
         cv2.imwrite(img_path, frame)
-        load_database()
         
         log_security_event("NEW_USER_REGISTRATION_SUCCESS")
         return jsonify({"status": "success", "message": "Biometric registration successfully locked into cloud registry!"})
         
     elif action == 'verify':
-        if not known_face_embeddings:
+        img_path = os.path.join(DATABASE_DIR, "User_Registered.jpg")
+        if not os.path.exists(img_path):
             log_security_event("ACCESS_REJECTED_EMPTY_DATABASE")
             return jsonify({"status": "denied", "message": "ACCESS DENIED: Database empty. Register profile first."})
             
-        # Detect faces in the current webcam frame
-        faces = face_app.get(frame)
-        
-        if not faces:
-            return jsonify({"status": "denied", "message": "VERIFICATION FAILED: Frame layout blank or face obscured."})
+        try:
+            # DeepFace verification using the lightning-fast, lightweight 'VGG-Face' model
+            result = DeepFace.verify(
+                img1_path=temp_frame_path, 
+                img2_path=img_path, 
+                model_name="VGG-Face", 
+                enforce_detection=False
+            )
             
-        # Extract vector from the first detected face
-        current_embedding = faces[0].normed_embedding
-        
-        # Calculate the mathematical match using dot product cosine similarity
-        for index, target_embedding in enumerate(known_face_embeddings):
-            similarity = np.dot(current_embedding, target_embedding)
-            
-            # InsightFace similarity threshold usually sits safely around 0.40 - 0.50 for verification
-            if similarity > 0.45:
-                name = known_face_names[index]
-                log_security_event(f"ACCESS_GRANTED_USER_{name.upper()}")
-                return jsonify({"status": "granted", "message": f"ACCESS GRANTED: Welcome {name}!"})
+            if result["verified"]:
+                log_security_event("ACCESS_GRANTED_USER_REGISTERED")
+                return jsonify({"status": "granted", "message": "ACCESS GRANTED: Welcome back!"})
+            else:
+                log_security_event("ACCESS_REJECTED_UNKNOWN_THREAT")
+                return jsonify({"status": "denied", "message": "ACCESS DENIED: Facial signature verification failed."})
                 
-        log_security_event("ACCESS_REJECTED_UNKNOWN_THREAT")
-        return jsonify({"status": "denied", "message": "ACCESS DENIED: Facial signature verification failed."})
+        except Exception as e:
+            return jsonify({"status": "denied", "message": f"VERIFICATION ERROR: {str(e)}"})
+        finally:
+            if os.path.exists(temp_frame_path):
+                os.remove(temp_frame_path)
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=False)
