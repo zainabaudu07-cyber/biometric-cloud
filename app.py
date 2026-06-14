@@ -5,27 +5,11 @@ import base64
 import os
 import sys
 import time
-
-# =======================================================================
-#  FORCE ULTRA-LOW MEMORY MANAGEMENT FOR CONSTRICTED CLOUD HOSTING
-# =======================================================================
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'          # Suppress massive TensorFlow warning streams
-os.environ['TF_NUM_INTEROP_THREADS'] = '1'        # Restrict execution thread overhead
-os.environ['TF_NUM_INTRAOP_THREADS'] = '1'        # Prevent parallel processing memory spikes
-
-import tensorflow as tf
-# Completely disable GPU tracking and virtual memory pre-allocation maps
-tf.config.set_visible_devices([], 'GPU')
-tf.config.threading.set_inter_op_parallelism_threads(1)
-tf.config.threading.set_intra_op_parallelism_threads(1)
-
-from deepface import DeepFace
-# =======================================================================
+import face_recognition
 
 app = Flask(__name__)
 
 def get_base_path():
-    """Determines the operational path on the cloud server."""
     if hasattr(sys, '_MEIPASS'):
         return os.path.dirname(sys.executable)
     return os.path.abspath(".")
@@ -38,7 +22,6 @@ if not os.path.exists(DATABASE_DIR):
     os.makedirs(DATABASE_DIR)
 
 def log_security_event(name_status):
-    """Appends a timestamped security audit record to security_log.txt."""
     timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
     try:
         with open(LOG_FILE_PATH, "a") as log_file:
@@ -46,9 +29,7 @@ def log_security_event(name_status):
     except Exception as e:
         print(f"[LOG ERROR] File-system write failure: {e}")
 
-# =========================================================
-#  FRONTEND BIOMETRIC INTERFACE PANEL (HTML/CSS/JS)
-# =========================================================
+# Frontend Biometric Panel HTML Layout
 HTML_PAGE = """
 <!DOCTYPE html>
 <html>
@@ -144,8 +125,8 @@ def process_image():
     np_array = np.frombuffer(img_bytes, dtype=np.uint8)
     frame = cv2.imdecode(np_array, cv2.IMREAD_COLOR)
     
-    temp_frame_path = os.path.join(BASE_DIR, "temp_current_frame.jpg")
-    cv2.imwrite(temp_frame_path, frame)
+    # Convert BGR (OpenCV format) to RGB (Face Recognition format)
+    rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     
     if action == 'register':
         try:
@@ -168,15 +149,22 @@ def process_image():
             return jsonify({"status": "denied", "message": "ACCESS DENIED: Database empty. Register profile first."})
             
         try:
-            # Running the lightning-fast, resource-friendly 'VGG-Face' framework
-            result = DeepFace.verify(
-                img1_path=temp_frame_path, 
-                img2_path=img_path, 
-                model_name="VGG-Face", 
-                enforce_detection=False
-            )
+            # Load registered reference image and extract landmarks
+            registered_image = face_recognition.load_image_file(img_path)
+            registered_encodings = face_recognition.face_encodings(registered_image)
             
-            if result["verified"]:
+            if len(registered_encodings) == 0:
+                return jsonify({"status": "denied", "message": "VERIFICATION ERROR: Stored reference photo lacks clear facial points."})
+                
+            # Extract landmarks from current camera frame
+            current_encodings = face_recognition.face_encodings(rgb_frame)
+            if len(current_encodings) == 0:
+                return jsonify({"status": "denied", "message": "ACCESS DENIED: No clear face detected in view window."})
+                
+            # Perform lightning-fast structural vector matching
+            matches = face_recognition.compare_faces([registered_encodings[0]], current_encodings[0], tolerance=0.6)
+            
+            if matches[0]:
                 log_security_event("ACCESS_GRANTED_USER_REGISTERED")
                 return jsonify({"status": "granted", "message": "ACCESS GRANTED: Welcome back!"})
             else:
@@ -185,13 +173,8 @@ def process_image():
                 
         except Exception as e:
             return jsonify({"status": "denied", "message": f"VERIFICATION ERROR: {str(e)}"})
-        finally:
-            if os.path.exists(temp_frame_path):
-                os.remove(temp_frame_path)
 
-# Dynamic port binding so Gunicorn can hook into Render's active routing pool
 port = int(os.environ.get("PORT", 10000))
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=port, debug=False)
-   
