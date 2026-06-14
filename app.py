@@ -5,7 +5,22 @@ import base64
 import os
 import sys
 import time
+
+# =======================================================================
+#  FORCE ULTRA-LOW MEMORY MANAGEMENT FOR CONSTRICTED CLOUD HOSTING
+# =======================================================================
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'          # Suppress massive TensorFlow warning streams
+os.environ['TF_NUM_INTEROP_THREADS'] = '1'        # Restrict execution thread overhead
+os.environ['TF_NUM_INTRAOP_THREADS'] = '1'        # Prevent parallel processing memory spikes
+
+import tensorflow as tf
+# Completely disable GPU tracking and virtual memory pre-allocation maps
+tf.config.set_visible_devices([], 'GPU')
+tf.config.threading.set_inter_op_parallelism_threads(1)
+tf.config.threading.set_intra_op_parallelism_threads(1)
+
 from deepface import DeepFace
+# =======================================================================
 
 app = Flask(__name__)
 
@@ -23,7 +38,7 @@ if not os.path.exists(DATABASE_DIR):
     os.makedirs(DATABASE_DIR)
 
 def log_security_event(name_status):
-    """Appends an absolute timestamped data row to security_log.txt."""
+    """Appends a timestamped security audit record to security_log.txt."""
     timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
     try:
         with open(LOG_FILE_PATH, "a") as log_file:
@@ -31,6 +46,9 @@ def log_security_event(name_status):
     except Exception as e:
         print(f"[LOG ERROR] File-system write failure: {e}")
 
+# =========================================================
+#  FRONTEND BIOMETRIC INTERFACE PANEL (HTML/CSS/JS)
+# =========================================================
 HTML_PAGE = """
 <!DOCTYPE html>
 <html>
@@ -55,7 +73,7 @@ HTML_PAGE = """
         <h1>=== BIOMETRIC CLOUD INTERFACE ===</h1>
         <p>Browser-to-Server Realtime Verification Hub | Secure Connection Required</p>
         
-        <video id="webcam" autoplay playsinline></video>
+        <video id="webcam" autoplay playsinline muted></video>
         <canvas id="photoCanvas" style="display:none;"></canvas>
         
         <div id="statusLog">System Status: Armed & Ready</div>
@@ -150,6 +168,7 @@ def process_image():
             return jsonify({"status": "denied", "message": "ACCESS DENIED: Database empty. Register profile first."})
             
         try:
+            # Running the lightning-fast, resource-friendly 'VGG-Face' framework
             result = DeepFace.verify(
                 img1_path=temp_frame_path, 
                 img2_path=img_path, 
@@ -170,5 +189,9 @@ def process_image():
             if os.path.exists(temp_frame_path):
                 os.remove(temp_frame_path)
 
+# Dynamic port binding so Gunicorn can hook into Render's active routing pool
+port = int(os.environ.get("PORT", 10000))
+
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=False)
+    app.run(host='0.0.0.0', port=port, debug=False)
+   
