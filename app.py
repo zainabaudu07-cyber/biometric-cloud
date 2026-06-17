@@ -1,4 +1,3 @@
-```python
 import streamlit as st
 import cv2
 import numpy as np
@@ -312,4 +311,3 @@ elif choice == "👥 Database Registry":
                     del st.session_state.db[user]
                     st.rerun()
 
-```
