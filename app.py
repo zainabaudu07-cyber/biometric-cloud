@@ -20,7 +20,7 @@ if "db" not in st.session_state:
 if "current_user" not in st.session_state:
     st.session_state.current_user = None
 
-# Custom styling
+# Custom styling (Fixed: changed unsafe_allow_index to unsafe_allow_html)
 st.markdown("""
     <style>
     .main-header {
@@ -56,19 +56,14 @@ st.markdown("""
         margin-bottom: 1rem;
     }
     </style>
-""", unsafe_allow_index=True)
+""", unsafe_allow_html=True)
 
 # ----------------------------------------------------
 # BIOMETRIC ALGORITHM ENGINE (Pure Python & OpenCV)
 # ----------------------------------------------------
-# We use OpenCV's Haar Cascade to detect faces.
-# Then we extract a landmark-based geometry signature (ratio array) 
-# representing structural eye-to-nose-to-mouth relations.
-# This avoids compilation failures common to dlib/deepface on cloud hosters.
 
 @st.cache_resource
 def load_face_cascade():
-    # Load OpenCV's built-in face detector
     return cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
 
 @st.cache_resource
@@ -78,17 +73,13 @@ def load_eye_cascade():
 def extract_facial_biometrics(image):
     """
     Detects a face, estimates landmarks, and returns a geometric signature.
-    Signature relies on: Face bounding box, relative eye coordinates, and width-height ratios.
-    This creates an immutable mathematical 'key'.
     """
     face_cascade = load_face_cascade()
     eye_cascade = load_eye_cascade()
     
-    # Convert PIL Image to OpenCv Format
     img_array = np.array(image.convert('RGB'))
     gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
     
-    # Detect Face
     faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(100, 100))
     
     if len(faces) == 0:
@@ -97,46 +88,29 @@ def extract_facial_biometrics(image):
     if len(faces) > 1:
         return None, "Multiple faces detected. Please make sure only one person is in frame."
     
-    # Analyze the largest detected face
     (x, y, w, h) = sorted(faces, key=lambda f: f[2]*f[3], reverse=True)[0]
     face_roi_gray = gray[y:y+h, x:x+w]
-    face_roi_color = img_array[y:y+h, x:x+w]
     
-    # Detect Eyes within face ROI
     eyes = eye_cascade.detectMultiScale(face_roi_gray, scaleFactor=1.1, minNeighbors=4, minSize=(20, 20))
     
-    # Draw diagnostic overlays on image
     annotated_img = img_array.copy()
-    cv2.rectangle(annotated_img, (x, y), (x+w, y+h), (37, 99, 235), 4) # Blue box
+    cv2.rectangle(annotated_img, (x, y), (x+w, y+h), (37, 99, 235), 4)
     
-    # Biometric Signature logic
-    # Signature vector composed of: 
-    # [Face width/height, Left eye X ratio, Left eye Y ratio, Right eye X ratio, Right eye Y ratio]
     signature = [float(w)/float(h)]
     
     if len(eyes) >= 2:
-        # Sort eyes left-to-right based on X coordinate
         sorted_eyes = sorted(eyes, key=lambda e: e[0])
         eye1, eye2 = sorted_eyes[0], sorted_eyes[1]
         
-        # Draw eyes
         for (ex, ey, ew, eh) in [eye1, eye2]:
             cv2.rectangle(annotated_img, (x + ex, y + ey), (x + ex + ew, y + ey + eh), (16, 185, 129), 2)
             
-        # Add relative landmark distances to signature
-        # 1. Normalized distance between eyes
         eye_dist = math.sqrt((eye2[0] - eye1[0])**2 + (eye2[1] - eye1[1])**2) / w
         signature.append(eye_dist)
-        
-        # 2. Left eye depth/width ratio
         signature.append(float(eye1[2]) / w)
-        # 3. Right eye depth/width ratio
         signature.append(float(eye2[2]) / w)
     else:
-        # Fallback if eyes are obscured (e.g., glasses, shadows)
-        # We compute regional pixel gradients (LBP-like layout metrics)
         resized = cv2.resize(face_roi_gray, (64, 64))
-        # Take 4 localized quadrant mean intensities as part of the signature
         q1 = np.mean(resized[0:32, 0:32]) / 255.0
         q2 = np.mean(resized[0:32, 32:64]) / 255.0
         q3 = np.mean(resized[32:64, 0:32]) / 255.0
@@ -150,16 +124,9 @@ def extract_facial_biometrics(image):
     }, "Success"
 
 def compare_signatures(sig1, sig2):
-    """
-    Computes distance metrics.
-    Lower score = higher similarity.
-    """
-    # Dynamic padding to make sure signature sizes match
     max_len = max(len(sig1), len(sig2))
     s1 = sig1 + [0.5] * (max_len - len(sig1))
     s2 = sig2 + [0.5] * (max_len - len(sig2))
-    
-    # Euclidean distance
     dist = math.sqrt(sum((a - b) ** 2 for a, b in zip(s1, s2)))
     return dist
 
@@ -167,10 +134,9 @@ def compare_signatures(sig1, sig2):
 # APP INTERFACE & PAGE ROUTING
 # ----------------------------------------------------
 
-st.markdown('<div class="main-header">BioPass Portal</div>', unsafe_allow_index=True)
-st.markdown('<div class="sub-header">Zero-Server Biometric Identification & Enrollment</div>', unsafe_allow_index=True)
+st.markdown('<div class="main-header">BioPass Portal</div>', unsafe_allow_html=True)
+st.markdown('<div class="sub-header">Zero-Server Biometric Identification & Enrollment</div>', unsafe_allow_html=True)
 
-# Navigation Menu
 menu = ["🏡 Portal Home", "📝 Enroll Face Profile", "🔒 Biometric Login", "👥 Database Registry"]
 choice = st.sidebar.selectbox("Navigate Menu", menu)
 
@@ -181,21 +147,19 @@ if choice == "🏡 Portal Home":
         All facial analysis and landmark detection are processed locally in your browser frame without transmitting raw video to third-party databases.
     """)
     
-    # Current session check
     if st.session_state.current_user:
         st.markdown(f"""
             <div class="profile-card">
                 <h4>🟢 Active Session: {st.session_state.current_user}</h4>
                 <p>Status: Authenticated via Facial Recognition</p>
             </div>
-        """, unsafe_allow_index=True)
+        """, unsafe_allow_html=True)
         if st.button("🚪 Logout of Portal"):
             st.session_state.current_user = None
             st.rerun()
     else:
         st.info("💡 Active Status: **Not Authenticated**. Enroll a face profile, then use the Biometric Login module to sign in.")
 
-    # Educational metric dashboard
     col1, col2, col3 = st.columns(3)
     with col1:
         st.metric(label="Registered Profiles", value=len(st.session_state.db))
@@ -209,8 +173,6 @@ elif choice == "📝 Enroll Face Profile":
     st.write("Enrollment captures your facial structure and computes a distinct structural signature.")
     
     username = st.text_input("Enter Profile Name/ID", placeholder="e.g., Jane Doe").strip()
-    
-    # Input options
     source_type = st.radio("Choose Input Method", ["💻 Live Webcam Capture", "📤 Upload Image File"])
     img_file = None
     
@@ -226,14 +188,11 @@ elif choice == "📝 Enroll Face Profile":
                 result, msg = extract_facial_biometrics(image)
                 
                 if result:
-                    # Save registration data
                     st.session_state.db[username] = {
                         "signature": result["signature"],
                         "photo": image
                     }
                     st.success(f"🎉 Biometric profile for '{username}' registered successfully!")
-                    
-                    # Display detection visualization
                     st.image(result["annotated_image"], caption="Analyzed Face Landmarks", use_container_width=True)
                 else:
                     st.error(f"Enrollment Failed: {msg}")
@@ -263,8 +222,6 @@ elif choice == "🔒 Biometric Login":
                     
                     if result:
                         live_sig = result["signature"]
-                        
-                        # Find best match in database
                         best_match = None
                         best_score = float("inf")
                         
@@ -274,9 +231,7 @@ elif choice == "🔒 Biometric Login":
                                 best_score = score
                                 best_match = user
                                 
-                        # Bio Threshold check (Lower = tighter security)
                         threshold = 0.15
-                        
                         st.image(result["annotated_image"], caption="Live Verification Scan", width=300)
                         
                         if best_score <= threshold:
@@ -303,11 +258,9 @@ elif choice == "👥 Database Registry":
                 st.image(data["photo"], width=100)
             with col2:
                 st.write(f"### **Name:** {user}")
-                # Stringify signature slice
                 sig_preview = ", ".join([str(round(x, 4)) for x in data["signature"][:4]]) + "..."
                 st.code(f"Unique Key ID: [ {sig_preview} ]")
                 
                 if st.button(f"🗑️ Purge '{user}' Profile", key=f"del_{user}"):
                     del st.session_state.db[user]
                     st.rerun()
-
